@@ -288,11 +288,47 @@ assert(#panes() == 4 and text(second) == 'second streamed', 'clear active pane d
 inline.clear_all()
 assert(#panes() == 0 and timers() == base_timers)
 
+-- A relative width is shared by short/long results and follows the source window's usable width.
+api.nvim_win_set_cursor(win, { 1, 0 })
+vim.cmd('normal! ggzt')
+local fixed = { width = 0.8, max_height = 12, col_offset = 4 }
+inline.open(buf, 0, fixed)
+inline.append(buf, 'short')
+inline.set_state(buf, 'done')
+first = panes()[1]
+inline.open(buf, 2, fixed)
+inline.append(buf, ('long '):rep(120))
+inline.set_state(buf, 'done')
+second = at(2)
+settle()
+local expected = math.floor((api.nvim_win_get_width(win) - 4) * 0.8)
+assert(api.nvim_win_get_width(first) + 2 == expected and api.nvim_win_get_width(second) + 2 == expected,
+  'short and long results have equal relative width')
+assert(api.nvim_win_get_height(first) < api.nvim_win_get_height(second), 'height still fits content')
+vim.cmd('vsplit')
+api.nvim_win_set_width(win, 30)
+settle()
+expected = math.floor((api.nvim_win_get_width(win) - 4) * 0.8)
+assert(api.nvim_win_get_width(first) + 2 == expected, 'relative width follows split resize')
+vim.cmd('close')
+api.nvim_set_current_win(win)
+settle()
+api.nvim_win_set_cursor(win, { 2, 0 })
+assert(not inline.clear_here() and #panes() == 2, 'Backspace away from an anchor does not close another result')
+api.nvim_win_set_cursor(win, { 1, 0 })
+assert(inline.clear_here() and #panes() == 1 and text(second):find('long', 1, true), 'Backspace clears only the result below')
+inline.clear_all()
+inline.open(buf, 0, { width = 45 })
+inline.append(buf, 'short')
+assert(api.nvim_win_get_width(panes()[1]) + 2 == 45, 'fixed width in columns')
+inline.clear_all()
+
 -- bad options are rejected before any gap/float/log is created
 local notified, notify = nil, vim.notify
 vim.notify = function(m) notified = m end
 local nbufs = #api.nvim_list_bufs()
-for _, o in ipairs({ { max_height = 2 }, { max_width = 0 }, { max_lines = 0 }, { max_height = 5.5 }, { max_width = '72' }, { col_offset = -1 } }) do
+for _, o in ipairs({ { max_height = 2 }, { max_width = 0 }, { max_lines = 0 }, { max_height = 5.5 }, { max_width = '72' },
+  { col_offset = -1 }, { width = 0 }, { width = -1 }, { width = 1.5 }, { width = '80%' } }) do
   notified = nil
   inline.open(buf, 0, o)
   assert(notified and #panes() == 0 and gap(buf) == nil and #api.nvim_list_bufs() == nbufs, 'invalid ' .. vim.inspect(o))

@@ -53,7 +53,8 @@ end
 
 local function valid(o)
   local function int(x, min) return type(x) == 'number' and x % 1 == 0 and x >= min end
-  return int(o.max_height, 3) and int(o.max_width, 3) and int(o.max_lines, 1) and int(o.col_offset, 0)
+  local width = o.width == nil or (type(o.width) == 'number' and o.width > 0 and o.width <= 1) or int(o.width, 3)
+  return width and int(o.max_height, 3) and int(o.max_width, 3) and int(o.max_lines, 1) and int(o.col_offset, 0)
 end
 
 local function hide(v)
@@ -125,7 +126,14 @@ function sync(v)
   local o, t, tw = v.opts, title(v), 0
   for _, c in ipairs(t) do tw = tw + fn.strdisplaywidth(c[1]) end
   local offset = math.min(o.col_offset, math.max(0, info.width - info.textoff - 3))
-  local iw = math.min(math.max(v.width, tw), o.max_width - 2, info.width - info.textoff - offset - 2)
+  local available = info.width - info.textoff - offset
+  local iw
+  if o.width then
+    local width = o.width <= 1 and math.floor(available * o.width) or o.width
+    iw = math.min(available, math.max(3, width)) - 2
+  else
+    iw = math.min(math.max(v.width, tw), o.max_width - 2, available - 2)
+  end
   local cap = math.min(o.max_height, info.height) - 2
   if iw < 1 or cap < 1 then return hide(v) end
   if api.nvim_win_get_width(v.float) ~= iw then api.nvim_win_set_config(v.float, { width = iw }) end
@@ -193,7 +201,7 @@ function M.open(bufnr, row, opts, req)
   local o = vim.tbl_extend('force', defaults, opts or {})
   if not valid(o) then -- reject before any gap/float/log exists; the run itself continues without a pane
     latest[bufnr] = nil
-    vim.notify('replise.inline: max_height/max_width must be integers >= 3 (border included), max_lines >= 1, col_offset >= 0',
+    vim.notify('replise.inline: width must be a fraction (0,1] or integer >= 3; max_height/max_width integers >= 3, max_lines >= 1, col_offset >= 0',
       vim.log.levels.ERROR)
     return
   end
@@ -331,9 +339,8 @@ function M.leave()
   return true
 end
 
-function M.clear(bufnr)
-  local v = views[bufnr] or pick(bufnr)
-  if not v then return end
+local function clear(v)
+  if not v then return false end
   if api.nvim_get_current_win() == v.float then M.leave() end
   views[v.log] = nil
   if latest[v.buf] == v then latest[v.buf] = nil end
@@ -348,7 +355,11 @@ function M.clear(bufnr)
     api.nvim_set_decoration_provider(ns, {})
     watching = false
   end
+  return true
 end
+
+function M.clear(bufnr) return clear(views[bufnr] or pick(bufnr)) end
+function M.clear_here() return clear(pick(0, true)) end
 
 function M.clear_all()
   for b in pairs(views) do M.clear(b) end

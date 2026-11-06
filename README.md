@@ -70,7 +70,7 @@ Every option left out is off.
 | `get_session(bufnr?)` | `{ state = 'starting'|'idle'|'busy', root, ft, handle, current?, pending? }` or `nil`. |
 | `get_repl_buffer(bufnr?)` | Terminal buffer of the session, for your own view. |
 | `require('replise.inline').focus(bufnr?)` / `.focus_here()` / `.leave()` | Enter the nearest result, enter only a result directly below the cursor, or return to source. |
-| `require('replise.inline').clear(bufnr?)` / `.clear_all()` | Remove the nearest result (or the one being browsed), or all results. Never stops the process. |
+| `require('replise.inline').clear(bufnr?)` / `.clear_here()` / `.clear_all()` | Remove the nearest result, only a result below the cursor, or all results. From a log, `clear()` removes that result. Never stops the process. |
 
 Request functions return a request id, or `nil, err` (also shown with `vim.notify`).
 
@@ -104,16 +104,19 @@ end)
 
 ## Inline pane
 
-`inline = { enabled = true, max_height = 8, max_width = 72, max_lines = 1000, col_offset = 0 }`
+`inline = { enabled = true, max_height = 8, width = 0.8, max_lines = 1000, col_offset = 0 }`
 
 - Each executed range keeps its own log pane. Running the same range again replaces just that result; other results stay.
   Ranges follow source edits with extmarks. Whole-file runs have a separate pane below the last line of the file; sends
   anchor their panes below the sent line or the last selected line. Blank virtual lines reserve space, with focusable
   bordered floats drawn over them, so source text is never changed or covered. Panes ending on the same line stack.
-- `max_width`/`max_height` include the border. The width is the widest line, then the height is the wrapped height
-  (correct for CJK). Both are clamped to the window. `max_lines` is the retained log and does not depend on the pane's
+- Sizes include the border. `width = 0.8` gives all results 80% of the source window's available text width (after
+  `col_offset`); it follows split resizing. An integer, e.g. `width = 80`, sets a fixed width in columns. Without `width`,
+  panes fit their content up to `max_width` (default `72`). The height fits the wrapped output up to `max_height`
+  (default `8`, correct for CJK). Both are clamped to the window. `max_lines` is the retained log and does not depend on the pane's
   size. `col_offset` moves the border right by that many columns from the source text's left edge (try `4`), clamped to
-  leave room in narrow windows. Invalid values (`max_*` must be integers >= 3, `max_lines` >= 1, `col_offset` >= 0) are
+  leave room in narrow windows. `width` must be a fraction in `(0, 1]` or an integer >= 3. Invalid values
+  (`max_*` must be integers >= 3, `max_lines` >= 1, `col_offset` >= 0) are
   reported, and that run gets no pane; existing results and the process are unaffected.
 - Streams in real time, including partial lines and `\r` progress. ANSI color (CSI) codes are stripped, even when split
   across chunks, and stderr is highlighted. The log buffer is read-only.
@@ -134,6 +137,7 @@ end)
 ```lua
 vim.api.nvim_create_autocmd('FileType', { pattern = 'replise_inline', callback = function(a)
   vim.keymap.set('n', '<Esc>', require('replise.inline').leave, { buffer = a.buf })
+  vim.keymap.set('n', 'q', require('replise.inline').clear, { buffer = a.buf })
 end })
 ```
 
@@ -145,6 +149,11 @@ vim.keymap.set('n', '<CR>', function()
     vim.api.nvim_feedkeys(vim.keycode('<CR>'), 'n', false)
   end
 end, { buffer = true }) -- e.g. in after/ftplugin/julia.lua
+vim.keymap.set('n', '<BS>', function()
+  if not require('replise.inline').clear_here() then
+    vim.api.nvim_feedkeys(vim.keycode('<BS>'), 'n', false)
+  end
+end, { buffer = true }) -- close a result from its anchor; keep normal Backspace elsewhere
 ```
 
 ## Julia
