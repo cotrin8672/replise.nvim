@@ -2,6 +2,7 @@
 vim.opt.rtp:prepend(vim.fn.fnamemodify(debug.getinfo(1, 'S').source:sub(2), ':p:h:h'))
 local api, uv = vim.api, vim.uv
 vim.o.columns, vim.o.lines = 80, 24
+vim.opt.winblend = 17
 local inline = require('replise.inline')
 local ns = api.nvim_get_namespaces()['replise.inline']
 
@@ -58,6 +59,7 @@ assert(#api.nvim_buf_get_extmarks(lb, ns, { 5, 0 }, { 5, -1 }, { overlap = true 
 local cfg = api.nvim_win_get_config(pw)
 assert(cfg.width + 2 == 30 and cfg.height + 2 == 8, ('cap incl. border %dx%d'):format(cfg.width, cfg.height))
 assert(cfg.focusable and not cfg.hide)
+assert(vim.wo[pw].winblend == 17, 'inherits winblend')
 assert(gap(buf) == 8, 'virtual gap = float height incl. border')
 assert(vim.deep_equal(api.nvim_win_get_position(pw), { 5, 0 }), 'float sits right under anchor')
 assert(api.nvim_win_get_cursor(pw)[1] == 7, 'tail follow')
@@ -191,6 +193,23 @@ assert(#panes() == 2)
 inline.set_state(buf, 'running')
 inline.clear_all()
 assert(#panes() == 0 and timers() == base_timers, 'clear_all stops timer immediately')
+
+-- Whole-file output at EOF can be focused from elsewhere without moving the cursor on run.
+api.nvim_win_set_cursor(win, { 1, 0 })
+vim.cmd('normal! ggzt')
+inline.open(buf, api.nvim_buf_line_count(buf) - 1, { max_height = 12, max_width = 120 })
+inline.append(buf, ((('w'):rep(200)) .. '\n'):rep(20))
+settle()
+pw = panes()[1]
+assert(api.nvim_win_get_config(pw).hide and api.nvim_win_get_cursor(win)[1] == 1, 'EOF output stays off-screen')
+assert(inline.focus(buf) and api.nvim_get_current_win() == pw, 'focus reveals off-screen EOF output')
+settle()
+cfg = api.nvim_win_get_config(pw)
+assert(not cfg.hide and cfg.width + 2 == math.min(120, api.nvim_win_get_width(win)) and cfg.height + 2 == 12,
+  'larger configured size, clamped to source window')
+assert(vim.wo[pw].winblend == 17, 'recreated float inherits winblend')
+assert(inline.leave() and api.nvim_get_current_win() == win)
+inline.clear_all()
 
 -- bad options are rejected before any gap/float/log is created
 local notified, notify = nil, vim.notify

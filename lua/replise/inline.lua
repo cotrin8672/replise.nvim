@@ -266,7 +266,18 @@ end
 
 function M.focus(bufnr)
   local v = live(bufnr)
-  if not v or not v.cfg then return false end
+  if not v then return false end
+  sync(v)
+  if views[v.buf] ~= v then return false end
+  if not v.cfg and v.win and api.nvim_win_is_valid(v.win) and api.nvim_win_get_buf(v.win) == v.buf then
+    local row = api.nvim_buf_get_extmark_by_id(v.buf, ns, v.mark, {})[1]
+    api.nvim_win_call(v.win, function()
+      api.nvim_win_set_cursor(0, { row + 1, 0 })
+      vim.cmd('normal! zvzt')
+    end)
+    sync(v)
+  end
+  if not v.cfg then return false end
   api.nvim_set_current_win(v.float)
   return true
 end

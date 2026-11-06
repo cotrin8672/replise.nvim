@@ -127,10 +127,6 @@ local function submit(ctx, req)
   return req.id
 end
 
-local function cursor_row(bufnr)
-  return bufnr == api.nvim_get_current_buf() and api.nvim_win_get_cursor(0)[1] - 1 or 0
-end
-
 local function send(bufnr, code, row)
   local ctx, err = M.get_context(bufnr)
   if not ctx then return fail(err) end
@@ -167,7 +163,7 @@ function M.run_buffer(opts)
   end
   local path = api.nvim_buf_get_name(b)
   if not vim.uv.fs_stat(path) then return fail('file does not exist on disk: ' .. path) end
-  return submit(ctx, { kind = 'run', bufnr = b, path = path, row = cursor_row(b) })
+  return submit(ctx, { kind = 'run', bufnr = b, path = path, row = api.nvim_buf_line_count(b) - 1 })
 end
 
 function M.send_line()

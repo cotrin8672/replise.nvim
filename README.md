@@ -105,9 +105,9 @@ end)
 
 `inline = { enabled = true, max_height = 8, max_width = 72, max_lines = 1000 }`
 
-- Each source buffer gets one live log pane. It opens only on an explicit run or send, anchored at the cursor (or at the
-  last selected line) with an extmark. Blank virtual lines reserve space below the anchor and a focusable bordered float
-  is drawn over them, so source text is never changed or covered.
+- Each source buffer gets one live log pane. Whole-file runs anchor it below the last line of the file; sends anchor it
+  below the sent line or the last selected line. Blank virtual lines reserve space below the extmark, with a focusable
+  bordered float drawn over them, so source text is never changed or covered.
 - `max_width`/`max_height` include the border. The width is the widest line, then the height is the wrapped height
   (correct for CJK). Both are clamped to the window. `max_lines` is the retained log and does not depend on the pane's
   size. Invalid values (`max_*` must be integers >= 3, `max_lines` >= 1) are reported, and that run gets no pane; the
@@ -121,9 +121,9 @@ end)
 - The title adds `stale` once the source buffer has changed since the run (any edit, even one undone).
 - The pane hides when its anchor scrolls off-screen or into a closed fold, or when its buffer isn't shown, and comes
   back on redraw.
-- `focus()` / `leave()` move between the pane and the source (`wincmd w`/`p` work too). `clear()` removes only the
-  view; later output from the same request does not reopen it, a new run does. Closing the float with `:q` does not
-  clear it.
+- `focus()` reveals an off-screen anchor before entering the pane; `leave()` returns to the source (`wincmd w`/`p` work too).
+  Running a file never moves the source cursor. `clear()` removes only the view; later output from the same request does
+  not reopen it, a new run does. Closing the float with `:q` does not clear it.
 - The log buffer has `filetype=replise_inline`, so you can add viewer keys yourself:
 
 ```lua
