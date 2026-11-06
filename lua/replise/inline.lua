@@ -94,7 +94,8 @@ end
 
 local function valid(o)
   local function int(x, min) return type(x) == 'number' and x % 1 == 0 and x >= min end
-  local width = o.width == nil or (type(o.width) == 'number' and o.width > 0 and o.width <= 1) or int(o.width, 3)
+  local width = o.width == nil or o.width == 'full'
+    or (type(o.width) == 'number' and o.width > 0 and o.width <= 1) or int(o.width, 3)
   return (o.style == 'rounded' or o.style == 'rails') and width
     and int(o.max_height, 3) and int(o.max_width, 3) and int(o.max_lines, 1) and int(o.col_offset, 0)
 end
@@ -170,11 +171,13 @@ function sync(v)
   local t, f = rails and '' or title(v), rails and rail_footer(v) or nil
   for _, c in ipairs(rails and f or t) do tw = tw + fn.strdisplaywidth(c[1]) end
   local sides = rails and 0 or 2
-  local offset = math.min(o.col_offset, math.max(0, info.width - info.textoff - 3))
-  local available = info.width - info.textoff - offset
+  local full, usable = o.width == 'full', info.width - info.textoff
+  local margins = full and 2 or 1
+  local offset = math.min(o.col_offset, math.max(0, math.floor((usable - 3) / margins)))
+  local available = usable - offset * margins
   local iw
   if o.width then
-    local width = o.width <= 1 and math.floor(available * o.width) or o.width
+    local width = full and available or (o.width <= 1 and math.floor(available * o.width) or o.width)
     iw = math.min(available, math.max(3, width)) - sides
   else
     iw = math.min(math.max(v.width, tw), o.max_width - sides, available - sides)
@@ -249,7 +252,7 @@ function M.open(bufnr, row, opts, req)
   local o = vim.tbl_extend('force', defaults, opts or {})
   if not valid(o) then -- reject before any gap/float/log exists; the run itself continues without a pane
     latest[bufnr] = nil
-    vim.notify("replise.inline: style must be 'rounded' or 'rails'; width a fraction (0,1] or integer >= 3; max_height/max_width integers >= 3, max_lines >= 1, col_offset >= 0",
+    vim.notify("replise.inline: style must be 'rounded' or 'rails'; width 'full', a fraction (0,1] or integer >= 3; max_height/max_width integers >= 3, max_lines >= 1, col_offset >= 0",
       vim.log.levels.ERROR)
     return
   end

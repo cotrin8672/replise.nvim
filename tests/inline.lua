@@ -403,6 +403,48 @@ inline.clear_all()
 for name, color in pairs(original) do api.nvim_set_hl(0, name, color) end
 api.nvim_exec_autocmds('ColorScheme', { modeline = false })
 
+-- Full width leaves the same inset at both edges and follows the source split.
+for _, style in ipairs({ 'rounded', 'rails' }) do
+  api.nvim_win_set_cursor(win, { 1, 0 })
+  vim.cmd('normal! ggzt')
+  local full = { style = style, width = 'full', col_offset = 4, max_height = 12 }
+  local sides = style == 'rails' and 0 or 2
+  inline.open(buf, 0, full)
+  inline.append(buf, 'short')
+  inline.set_state(buf, 'done')
+  first = panes()[1]
+  inline.open(buf, 2, full)
+  inline.append(buf, ('long '):rep(80))
+  inline.set_state(buf, 'done')
+  second = at(2)
+  settle()
+  local info = vim.fn.getwininfo(win)[1]
+  expected = info.width - info.textoff - 8
+  assert(api.nvim_win_get_width(first) + sides == expected and api.nvim_win_get_width(second) + sides == expected,
+    'full width fills between equal margins: ' .. style)
+  assert(api.nvim_win_get_config(first).col == 4, 'left inset: ' .. style)
+  assert(api.nvim_win_get_height(first) < api.nvim_win_get_height(second), 'height still fits output: ' .. style)
+  vim.cmd('vsplit')
+  local split = api.nvim_get_current_win()
+  api.nvim_win_set_width(win, 30)
+  settle()
+  info = vim.fn.getwininfo(win)[1]
+  assert(api.nvim_win_get_width(first) + sides == info.width - info.textoff - 8,
+    'full width follows split resize: ' .. style)
+  api.nvim_set_current_win(win)
+  full.col_offset = 100
+  inline.open(buf, 0, full)
+  inline.set_state(buf, 'done')
+  settle()
+  cfg = api.nvim_win_get_config(first)
+  assert(cfg.col * 2 + cfg.width + sides == info.width - info.textoff and cfg.width >= 1,
+    'oversized margins shrink symmetrically: ' .. style)
+  inline.clear_all()
+  api.nvim_win_close(split, false)
+  api.nvim_set_current_win(win)
+  settle()
+end
+
 -- bad options are rejected before any gap/float/log is created
 local notified, notify = nil, vim.notify
 vim.notify = function(m) notified = m end
