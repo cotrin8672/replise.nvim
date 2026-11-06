@@ -106,6 +106,14 @@ end)
 
 `inline = { enabled = true, max_height = 8, width = 0.8, max_lines = 1000, col_offset = 0 }`
 
+- `style = 'rounded'` (default) uses a rounded frame. `style = 'rails'` uses only horizontal top/bottom rails, with a
+  status pill on the bottom rail and no top label. Its icon is a Braille spinner while starting/running, then `✓`, `×`
+  or `■` for done, error or interrupted. The pill caps use Powerline glyphs `` and ``; use a font containing them.
+- Rails use semantic highlights: `DiagnosticInfo`, `DiagnosticOk`, `DiagnosticError`, `DiagnosticWarn` for status text,
+  and `FloatBorder` for the rails. The pill background uses `Normal.bg`; with a transparent `Normal`, it uses Neovim's
+  `NvimDarkGrey1` / `NvimLightGrey1` palette color according to `'background'`. The generated `RepliseInlineInfo`,
+  `RepliseInlineOk`, `RepliseInlineError`, `RepliseInlineWarn` and `RepliseInlinePillCap` highlights refresh on `ColorScheme`.
+  These highlights can be customized after creation / colorscheme application.
 - Each executed range keeps its own log pane. Running the same range again replaces just that result; other results stay.
   Ranges follow source edits with extmarks. Whole-file runs have a separate pane below the last line of the file; sends
   anchor their panes below the sent line or the last selected line. Blank virtual lines reserve space, with focusable
@@ -122,9 +130,9 @@ end)
   across chunks, and stderr is highlighted. The log buffer is read-only.
   While the pane's cursor is on the last line it follows new output; scroll up to browse, `G` to follow again.
 - While starting or running, the title shows a spinner band, the state and the elapsed time, and a bright bar sweeps
-  along the bottom border. Afterwards the title shows `done`, `error` or `interrupted`. One shared timer drives the
-  animation; it pauses while no running pane is visible and stops when the last pane is cleared.
-- The title adds `stale` once the source buffer has changed since the run (any edit, even one undone).
+  along the bottom border in the default rounded style. Afterwards the title shows `done`, `error` or `interrupted`.
+  One shared timer drives the animation; it pauses while no running pane is visible and stops when the last pane is cleared.
+- The status adds `stale` once the source buffer has changed since the run (any edit, even one undone).
 - The pane hides when its anchor scrolls off-screen or into a closed fold, or when its buffer isn't shown, and comes
   back on redraw.
 - `focus()` chooses the nearest result and reveals its anchor if off-screen; `focus_here()` only enters a result directly

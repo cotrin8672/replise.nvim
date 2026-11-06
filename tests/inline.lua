@@ -339,12 +339,76 @@ inline.append(buf, 'short')
 assert(api.nvim_win_get_width(panes()[1]) + 2 == 45, 'fixed width in columns')
 inline.clear_all()
 
+-- Rails: no side borders/top title; bottom glyph pill follows the semantic palette.
+local original = {}
+for _, name in ipairs({ 'Normal', 'NormalFloat', 'FloatBorder', 'DiagnosticInfo' }) do
+  original[name] = api.nvim_get_hl(0, { name = name, link = false })
+end
+api.nvim_set_hl(0, 'Normal', { fg = 0xffffff }) -- transparent theme
+api.nvim_set_hl(0, 'NormalFloat', { fg = 0xffffff, bg = 0x202020 })
+api.nvim_set_hl(0, 'FloatBorder', { fg = 0x888888, bg = 0x242424 })
+api.nvim_win_set_cursor(win, { 1, 0 })
+vim.cmd('normal! ggzt')
+local rail_opts = { style = 'rails', width = 0.8, max_height = 8, col_offset = 4 }
+inline.open(buf, 0, rail_opts)
+inline.append(buf, 'hello rails\nmore output')
+inline.set_state(buf, 'running')
+settle()
+pw = panes()[1]
+cfg = api.nvim_win_get_config(pw)
+assert(cfg.border[2] == '─' and cfg.border[6] == '─' and cfg.border[1] == '' and cfg.border[4] == '' and cfg.border[8] == '',
+  'horizontal rails only')
+assert(not cfg.title or cfg.title == '' or #cfg.title == 0, 'rails have no top title')
+assert(cfg.width == math.floor((api.nvim_win_get_width(win) - 4) * 0.8), 'rail width includes no side borders')
+assert(gap(buf) == cfg.height + 2 and vim.wo[pw].winblend == 17, 'rail geometry and inherited blend')
+assert(cfg.footer[1][1] == '' and cfg.footer[3][1] == '' and cfg.footer[2][2] == 'RepliseInlineInfo',
+  'bottom pill with Powerline caps and info text')
+local function highlight(name) return api.nvim_get_hl(0, { name = name, link = false }) end
+local neutral = api.nvim_get_color_by_name(vim.o.background == 'dark' and 'NvimDarkGrey1' or 'NvimLightGrey1')
+for source, target in pairs({
+  DiagnosticInfo = 'RepliseInlineInfo', DiagnosticOk = 'RepliseInlineOk',
+  DiagnosticError = 'RepliseInlineError', DiagnosticWarn = 'RepliseInlineWarn',
+}) do
+  assert(highlight(target).fg == highlight(source).fg and highlight(target).bg == neutral, 'semantic foreground on neutral pill')
+end
+assert(highlight('RepliseInlinePillCap').fg == neutral and highlight('RepliseInlinePillCap').bg == 0x242424,
+  'caps blend into the rail background')
+local spinner = vim.fn.strcharpart(cfg.footer[2][1], 1, 1)
+settle(250)
+assert(vim.fn.strcharpart(api.nvim_win_get_config(pw).footer[2][1], 1, 1) ~= spinner, 'single-cell spinner advances')
+for state, group in pairs({ done = 'RepliseInlineOk', error = 'RepliseInlineError', interrupted = 'RepliseInlineWarn' }) do
+  inline.set_state(buf, state)
+  cfg = api.nvim_win_get_config(pw)
+  assert(cfg.footer[2][2] == group and cfg.footer[2][1]:find(state, 1, true), 'pill changes with state')
+end
+settle(150)
+assert(timers() == base_timers, 'completed rail stops animation')
+api.nvim_set_hl(0, 'DiagnosticInfo', { fg = 0x123456 })
+api.nvim_set_hl(0, 'Normal', { fg = 0xffffff, bg = 0x101010 })
+api.nvim_exec_autocmds('ColorScheme', { modeline = false })
+assert(highlight('RepliseInlineInfo').fg == 0x123456 and highlight('RepliseInlineInfo').bg == 0x101010,
+  'colorscheme refresh follows semantic foreground and background')
+assert(highlight('RepliseInlinePillCap').fg == 0x101010, 'cap follows the updated pill background')
+inline.open(buf, 0, { width = 40 })
+cfg = api.nvim_win_get_config(pw)
+assert(cfg.width + 2 == 40 and cfg.title and #cfg.title > 0, 'same pane can return to rounded style')
+inline.open(buf, 0, rail_opts)
+cfg = api.nvim_win_get_config(pw)
+assert(not cfg.title or cfg.title == '' or #cfg.title == 0, 'switching to rails clears the old title')
+inline.set_state(buf, 'done')
+api.nvim_buf_set_lines(buf, 0, 1, false, { 'edited after run' })
+settle()
+assert(vim.iter(api.nvim_win_get_config(pw).footer):any(function(c) return c[1]:find('stale') end), 'rail status marks stale output')
+inline.clear_all()
+for name, color in pairs(original) do api.nvim_set_hl(0, name, color) end
+api.nvim_exec_autocmds('ColorScheme', { modeline = false })
+
 -- bad options are rejected before any gap/float/log is created
 local notified, notify = nil, vim.notify
 vim.notify = function(m) notified = m end
 local nbufs = #api.nvim_list_bufs()
 for _, o in ipairs({ { max_height = 2 }, { max_width = 0 }, { max_lines = 0 }, { max_height = 5.5 }, { max_width = '72' },
-  { col_offset = -1 }, { width = 0 }, { width = -1 }, { width = 1.5 }, { width = '80%' } }) do
+  { col_offset = -1 }, { width = 0 }, { width = -1 }, { width = 1.5 }, { width = '80%' }, { style = 'unknown' } }) do
   notified = nil
   inline.open(buf, 0, o)
   assert(notified and #panes() == 0 and gap(buf) == nil and #api.nvim_list_bufs() == nbufs, 'invalid ' .. vim.inspect(o))

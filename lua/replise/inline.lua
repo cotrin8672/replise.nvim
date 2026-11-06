@@ -4,31 +4,72 @@ local M = {}
 
 local ns = api.nvim_create_namespace('replise.inline')
 local ranges = api.nvim_create_namespace('replise.inline.ranges')
-local defaults = { max_height = 8, max_width = 72, max_lines = 1000, col_offset = 0 }
+local defaults = { max_height = 8, max_width = 72, max_lines = 1000, col_offset = 0, style = 'rounded' }
 local SPIN = { starting = true, running = true }
 local HL = { done = 'DiagnosticOk', error = 'DiagnosticError', interrupted = 'DiagnosticWarn' }
 local FRAMES = {}
 for i = 0, 6 do
   FRAMES[#FRAMES + 1] = ('▱'):rep(i) .. '▰▰▰' .. ('▱'):rep(6 - i)
 end
+local SPINNER = { '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏' }
+local ICONS = { done = '✓', error = '×', interrupted = '■' }
+local RAIL_BORDER = { '', '─', '', '', '', '─', '', '' }
+local PILL_HL = {
+  DiagnosticInfo = 'RepliseInlineInfo', DiagnosticOk = 'RepliseInlineOk',
+  DiagnosticError = 'RepliseInlineError', DiagnosticWarn = 'RepliseInlineWarn',
+}
 
 local views = {} -- [log bufnr] = view
 local latest = {} -- [source bufnr] = the pane receiving the current request's output
-local timer, pending, watching, sync
+local timer, pending, watching, sync, palette_group
+
+local function palette()
+  local normal = api.nvim_get_hl(0, { name = 'Normal', link = false })
+  local float = api.nvim_get_hl(0, { name = 'NormalFloat', link = false })
+  local border = api.nvim_get_hl(0, { name = 'FloatBorder', link = false })
+  local bg = normal.bg or api.nvim_get_color_by_name(vim.o.background == 'dark' and 'NvimDarkGrey1' or 'NvimLightGrey1')
+  for source, target in pairs(PILL_HL) do
+    local color = api.nvim_get_hl(0, { name = source, link = false })
+    api.nvim_set_hl(0, target, { fg = color.fg or normal.fg, bg = bg })
+  end
+  api.nvim_set_hl(0, 'RepliseInlinePillCap', { fg = bg, bg = border.bg or float.bg })
+end
+
+local function ensure_palette()
+  if palette_group then return end
+  palette()
+  palette_group = api.nvim_create_augroup('replise.inline.palette', {})
+  api.nvim_create_autocmd('ColorScheme', { group = palette_group, callback = palette })
+end
 
 local function resolve(b)
   b = (b == nil or b == 0) and api.nvim_get_current_buf() or b
   return views[b] and views[b].buf or b
 end
 
-local function title(v)
+local function status_text(v)
   local s = ('%s %.1fs'):format(v.state, ((v.t1 or uv.hrtime()) - v.t0) / 1e9)
   if v.msg and v.msg ~= '' then s = s .. ': ' .. v.msg end
-  local t = { { ' ' .. s .. ' ', HL[v.state] or 'FloatTitle' } }
+  return s
+end
+
+local function title(v)
+  local t = { { ' ' .. status_text(v) .. ' ', HL[v.state] or 'FloatTitle' } }
   if SPIN[v.state] then table.insert(t, 1, { ' ' .. FRAMES[v.frame % #FRAMES + 1], 'DiagnosticInfo' }) end
   -- source edited since this run was opened: the shown output may no longer match the code
   if api.nvim_buf_get_changedtick(v.buf) ~= v.tick then t[#t + 1] = { ' stale ', 'DiagnosticWarn' } end
   return t
+end
+
+local function rail_footer(v)
+  local icon = SPIN[v.state] and SPINNER[v.frame % #SPINNER + 1] or ICONS[v.state] or '·'
+  local f = {
+    { '', 'RepliseInlinePillCap' },
+    { ' ' .. icon .. ' ' .. status_text(v) .. ' ', PILL_HL[HL[v.state] or 'DiagnosticInfo'] },
+    { '', 'RepliseInlinePillCap' },
+  }
+  if api.nvim_buf_get_changedtick(v.buf) ~= v.tick then f[#f + 1] = { ' stale ', 'DiagnosticWarn' } end
+  return f
 end
 
 -- busy: a bright bar sweeps the whole bottom border, so the pane is framed top and bottom while it runs
@@ -54,7 +95,8 @@ end
 local function valid(o)
   local function int(x, min) return type(x) == 'number' and x % 1 == 0 and x >= min end
   local width = o.width == nil or (type(o.width) == 'number' and o.width > 0 and o.width <= 1) or int(o.width, 3)
-  return width and int(o.max_height, 3) and int(o.max_width, 3) and int(o.max_lines, 1) and int(o.col_offset, 0)
+  return (o.style == 'rounded' or o.style == 'rails') and width
+    and int(o.max_height, 3) and int(o.max_width, 3) and int(o.max_lines, 1) and int(o.col_offset, 0)
 end
 
 local function hide(v)
@@ -123,16 +165,19 @@ function sync(v)
     - th(win, { start_row = info.topline - 1, end_row = info.topline - 1 }).fill
     + sv.topfill
 
-  local o, t, tw = v.opts, title(v), 0
-  for _, c in ipairs(t) do tw = tw + fn.strdisplaywidth(c[1]) end
+  local o, tw = v.opts, 0
+  local rails = o.style == 'rails'
+  local t, f = rails and '' or title(v), rails and rail_footer(v) or nil
+  for _, c in ipairs(rails and f or t) do tw = tw + fn.strdisplaywidth(c[1]) end
+  local sides = rails and 0 or 2
   local offset = math.min(o.col_offset, math.max(0, info.width - info.textoff - 3))
   local available = info.width - info.textoff - offset
   local iw
   if o.width then
     local width = o.width <= 1 and math.floor(available * o.width) or o.width
-    iw = math.min(available, math.max(3, width)) - 2
+    iw = math.min(available, math.max(3, width)) - sides
   else
-    iw = math.min(math.max(v.width, tw), o.max_width - 2, available - 2)
+    iw = math.min(math.max(v.width, tw), o.max_width - sides, available - sides)
   end
   local cap = math.min(o.max_height, info.height) - 2
   if iw < 1 or cap < 1 then return hide(v) end
@@ -155,7 +200,10 @@ function sync(v)
   local h = math.min(v.gap, info.height - above) - 2 -- only the part of the gap inside the window
   if h < 1 then return hide(v) end
 
-  local cfg = { relative = 'win', win = win, width = iw, height = h, hide = false, title = t, footer = footer(v, iw) }
+  local cfg = {
+    relative = 'win', win = win, width = iw, height = h, hide = false,
+    border = rails and RAIL_BORDER or 'rounded', title = t, footer = f or footer(v, iw),
+  }
   if sv.leftcol == 0 then -- native anchoring: follows scrolling without waiting for a resync
     cfg.bufpos, cfg.row, cfg.col = { row, 0 }, text_rows + preceding, offset
   else -- bufpos misplaces floats when column 0 is scrolled off horizontally
@@ -201,10 +249,11 @@ function M.open(bufnr, row, opts, req)
   local o = vim.tbl_extend('force', defaults, opts or {})
   if not valid(o) then -- reject before any gap/float/log exists; the run itself continues without a pane
     latest[bufnr] = nil
-    vim.notify('replise.inline: width must be a fraction (0,1] or integer >= 3; max_height/max_width integers >= 3, max_lines >= 1, col_offset >= 0',
+    vim.notify("replise.inline: style must be 'rounded' or 'rails'; width a fraction (0,1] or integer >= 3; max_height/max_width integers >= 3, max_lines >= 1, col_offset >= 0",
       vim.log.levels.ERROR)
     return
   end
+  if o.style == 'rails' then ensure_palette() end
   row = math.max(0, math.min(row or 0, api.nvim_buf_line_count(bufnr) - 1))
   local kind, range = req and req.kind or 'send', req and req.range or { row, 0, row, 0 }
   local v
