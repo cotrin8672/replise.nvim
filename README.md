@@ -137,7 +137,7 @@ end)
 ```lua
 vim.api.nvim_create_autocmd('FileType', { pattern = 'replise_inline', callback = function(a)
   vim.keymap.set('n', '<Esc>', require('replise.inline').leave, { buffer = a.buf })
-  vim.keymap.set('n', 'q', require('replise.inline').clear, { buffer = a.buf })
+  vim.keymap.set('n', '<BS>', require('replise.inline').clear, { buffer = a.buf })
 end })
 ```
 
