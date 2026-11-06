@@ -70,7 +70,7 @@ Every option left out is off.
 | `get_session(bufnr?)` | `{ state = 'starting'|'idle'|'busy', root, ft, handle, current?, pending? }` or `nil`. |
 | `get_repl_buffer(bufnr?)` | Terminal buffer of the session, for your own view. |
 | `require('replise.inline').focus(bufnr?)` / `.focus_here()` / `.leave()` | Enter the nearest result, enter only a result directly below the cursor, or return to source. |
-| `require('replise.inline').clear(bufnr?)` / `.clear_here()` / `.clear_all()` | Remove the nearest result, only a result below the cursor, or all results. From a log, `clear()` removes that result. Never stops the process. |
+| `require('replise.inline').clear(bufnr?)` / `.clear_here()` / `.clear_all(bufnr?)` | Remove one result, or all results in a buffer. `clear_all(0)` clears the current source buffer (also from its logs); `clear_all()` clears every buffer. Never stops the process. |
 
 Request functions return a request id, or `nil, err` (also shown with `vim.notify`).
 
@@ -89,7 +89,7 @@ map('n', '<leader>er', replise.restart)
 map('n', '<leader>is', replise.send_line)
 map('x', '<leader>is', replise.send_selection)
 map('n', '<leader>ii', inline.focus)
-map('n', '<leader>ic', inline.clear)
+map('n', '<leader>ic', function() inline.clear_all(0) end)
 map('n', '<leader>it', function() -- toggle your own view of the shared REPL (starts it if needed)
   local b = replise.get_repl_buffer() or (replise.start() and replise.get_repl_buffer())
   if not b then return end

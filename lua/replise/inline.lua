@@ -361,8 +361,11 @@ end
 function M.clear(bufnr) return clear(views[bufnr] or pick(bufnr)) end
 function M.clear_here() return clear(pick(0, true)) end
 
-function M.clear_all()
-  for b in pairs(views) do M.clear(b) end
+function M.clear_all(bufnr)
+  bufnr = bufnr ~= nil and resolve(bufnr) or nil
+  for _, v in pairs(views) do
+    if bufnr == nil or v.buf == bufnr then clear(v) end
+  end
 end
 
 return M

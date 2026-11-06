@@ -190,7 +190,23 @@ local b2 = api.nvim_create_buf(true, false)
 api.nvim_buf_set_lines(b2, 0, -1, false, { 'other' })
 inline.open(b2, 0)
 assert(#panes() == 2)
+inline.append(b2, 'other buffer')
+local other
+for _, w in ipairs(panes()) do if api.nvim_win_get_buf(w) ~= lb then other = w end end
+inline.open(buf, 2)
+inline.append(buf, 'second result in source')
+assert(#panes() == 3)
 inline.set_state(buf, 'running')
+inline.clear_all(0)
+assert(#panes() == 1 and panes()[1] == other and gap(buf) == nil, 'buffer clear preserves other buffers')
+inline.append(buf, 'late')
+assert(#panes() == 1, 'late output after buffer clear stays hidden')
+inline.open(buf, 0)
+inline.open(buf, 2)
+assert(inline.focus(buf))
+inline.clear_all(0)
+assert(#panes() == 1 and panes()[1] == other and api.nvim_get_current_win() == win,
+  'buffer clear from a log resolves its source buffer')
 inline.clear_all()
 assert(#panes() == 0 and timers() == base_timers, 'clear_all stops timer immediately')
 
