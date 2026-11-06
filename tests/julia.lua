@@ -333,13 +333,15 @@ vim.bo.filetype = 'julia'
 local sb = vim.api.nvim_get_current_buf()
 defer(function() replise.stop(sb) end)
 local function pane()
+  local win, newest = nil, 0
   for _, w in ipairs(vim.api.nvim_list_wins()) do
     local b = vim.api.nvim_win_get_buf(w)
-    if vim.bo[b].filetype == 'replise_inline' then
-      local t = vim.api.nvim_win_get_config(w).title
-      return table.concat(vim.api.nvim_buf_get_lines(b, 0, -1, false), '\n'),
-        type(t) == 'table' and table.concat(vim.tbl_map(function(c) return c[1] end, t)) or tostring(t)
-    end
+    if vim.bo[b].filetype == 'replise_inline' and b > newest then win, newest = w, b end
+  end
+  if win then
+    local t = vim.api.nvim_win_get_config(win).title
+    return table.concat(vim.api.nvim_buf_get_lines(newest, 0, -1, false), '\n'),
+      type(t) == 'table' and table.concat(vim.tbl_map(function(c) return c[1] end, t)) or tostring(t)
   end
   return '', ''
 end
@@ -369,8 +371,18 @@ vim.api.nvim_buf_set_lines(sb, -1, -1, false, { 'error("e2e boom")', 'while true
 vim.api.nvim_win_set_cursor(0, { 3, 0 })
 replise.send_line()
 settle('error')
+check(require('replise.inline').focus_here(), 'enter error output at its anchor')
+require('replise.inline').leave()
 text, title = pane()
 check(text:find('e2e boom') and title:find('error'), 'e2e error', text, title)
+local preserved = 0
+for _, w in ipairs(vim.api.nvim_list_wins()) do
+  local b = vim.api.nvim_win_get_buf(w)
+  if vim.bo[b].filetype == 'replise_inline' then
+    preserved = preserved + 1
+  end
+end
+check(preserved == 2, 'file output remains alongside line output', preserved)
 
 vim.api.nvim_win_set_cursor(0, { 4, 0 })
 replise.send_line()
@@ -378,6 +390,8 @@ vim.wait(1500) -- julia is really inside the loop now
 check(replise.get_session(sb).state == 'busy', 'e2e busy')
 replise.interrupt(sb)
 settle('interrupt')
+check(require('replise.inline').focus_here(), 'enter interrupted output at its anchor')
+require('replise.inline').leave()
 text, title = pane()
 check(title:find('interrupted'), 'e2e interrupt acknowledged', title)
 

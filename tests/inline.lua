@@ -211,11 +211,88 @@ assert(vim.wo[pw].winblend == 17, 'recreated float inherits winblend')
 assert(inline.leave() and api.nvim_get_current_win() == win)
 inline.clear_all()
 
+-- Several results survive in one buffer; Enter targets the exact anchor, not the latest request.
+api.nvim_buf_set_lines(buf, 0, -1, false, { 'one', 'two', 'three', 'four', 'five', 'six' })
+api.nvim_win_set_cursor(win, { 1, 0 })
+vim.cmd('normal! ggzt')
+local opts = { max_height = 4, max_width = 40, col_offset = 4 }
+local function text(w) return table.concat(api.nvim_buf_get_lines(api.nvim_win_get_buf(w), 0, -1, false), '\n') end
+local function at(row)
+  for _, w in ipairs(panes()) do
+    if api.nvim_win_get_config(w).bufpos[1] == row then return w end
+  end
+end
+inline.open(buf, 0, opts)
+inline.append(buf, 'first')
+inline.set_state(buf, 'done')
+local first = panes()[1]
+inline.open(buf, 2, opts)
+inline.append(buf, 'second')
+inline.set_state(buf, 'running')
+settle()
+local second = at(2)
+assert(#panes() == 2 and text(first) == 'first' and text(second) == 'second', 'retains both results')
+assert(api.nvim_win_get_position(first)[2] == 4 and api.nvim_win_get_position(second)[2] == 4, 'right inset')
+assert(inline.focus_here() and api.nvim_get_current_win() == first, 'Enter enters the pane below the cursor')
+inline.append(buf, ' streamed')
+assert(text(first) == 'first' and text(second) == 'second streamed', 'stream stays with its request while browsing old output')
+assert(inline.leave())
+api.nvim_win_set_cursor(win, { 2, 0 })
+assert(not inline.focus_here() and api.nvim_get_current_win() == win, 'no pane below: Enter may fall back normally')
+api.nvim_win_set_cursor(win, { 3, 0 })
+assert(inline.focus_here() and api.nvim_get_current_win() == second)
+assert(inline.leave())
+inline.set_state(buf, 'done')
+inline.open(buf, 0, opts)
+inline.append(buf, 'replaced')
+inline.set_state(buf, 'done')
+assert(#panes() == 2 and at(0) == first and text(first) == 'replaced', 'same range reuses only its pane')
+assert(text(second) == 'second streamed', 'rerun keeps other results')
+
+-- Distinct ranges ending on the same line, including a whole-file run, stack without overlap.
+inline.open(buf, 2, opts, { kind = 'send', range = { 0, 0, 2, 0 } })
+inline.append(buf, 'range')
+inline.set_state(buf, 'done')
+inline.open(buf, 5, opts, { kind = 'run' })
+inline.append(buf, 'file')
+inline.set_state(buf, 'done')
+inline.open(buf, 5, opts)
+inline.append(buf, 'last line')
+inline.set_state(buf, 'done')
+settle()
+assert(#panes() == 5, 'whole-file and last-line results coexist')
+local same_row = {}
+for _, w in ipairs(panes()) do
+  local c = api.nvim_win_get_config(w)
+  if c.bufpos[1] == 2 then same_row[#same_row + 1] = w end
+end
+assert(#same_row == 2)
+table.sort(same_row, function(a, b) return api.nvim_win_get_position(a)[1] < api.nvim_win_get_position(b)[1] end)
+assert(api.nvim_win_get_position(same_row[1])[1] + api.nvim_win_get_height(same_row[1]) + 2
+  <= api.nvim_win_get_position(same_row[2])[1], 'same-line panes do not overlap')
+inline.open(buf, 5, opts, { kind = 'run' })
+inline.append(buf, 'file again')
+inline.set_state(buf, 'done')
+assert(#panes() == 5, 'repeated whole-file run updates its own pane')
+api.nvim_buf_set_lines(buf, 0, 0, false, { 'inserted above' })
+inline.open(buf, 1, opts)
+inline.append(buf, 'tracked')
+inline.set_state(buf, 'done')
+assert(#panes() == 5 and text(first) == 'tracked', 'ranges follow edits above them')
+api.nvim_win_set_cursor(win, { 2, 0 })
+assert(inline.focus_here() and api.nvim_get_current_win() == first)
+inline.clear()
+assert(#panes() == 4 and not api.nvim_win_is_valid(first), 'clear removes only the chosen pane')
+inline.append(buf, 'late')
+assert(#panes() == 4 and text(second) == 'second streamed', 'clear active pane does not redirect late output')
+inline.clear_all()
+assert(#panes() == 0 and timers() == base_timers)
+
 -- bad options are rejected before any gap/float/log is created
 local notified, notify = nil, vim.notify
 vim.notify = function(m) notified = m end
 local nbufs = #api.nvim_list_bufs()
-for _, o in ipairs({ { max_height = 2 }, { max_width = 0 }, { max_lines = 0 }, { max_height = 5.5 }, { max_width = '72' } }) do
+for _, o in ipairs({ { max_height = 2 }, { max_width = 0 }, { max_lines = 0 }, { max_height = 5.5 }, { max_width = '72' }, { col_offset = -1 } }) do
   notified = nil
   inline.open(buf, 0, o)
   assert(notified and #panes() == 0 and gap(buf) == nil and #api.nvim_list_bufs() == nbufs, 'invalid ' .. vim.inspect(o))

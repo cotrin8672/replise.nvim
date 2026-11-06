@@ -117,7 +117,7 @@ local function submit(ctx, req)
   end
   last_id = last_id + 1
   req.id = last_id
-  ui('open', req.bufnr, req.row, config.inline)
+  ui('open', req.bufnr, req.row, config.inline, req)
   if s.state == 'starting' then
     s.pending = req
     ui('set_state', req.bufnr, 'starting')
@@ -127,10 +127,11 @@ local function submit(ctx, req)
   return req.id
 end
 
-local function send(bufnr, code, row)
+local function send(bufnr, code, row, range)
   local ctx, err = M.get_context(bufnr)
   if not ctx then return fail(err) end
-  return submit(ctx, { kind = 'send', bufnr = ctx.bufnr, path = api.nvim_buf_get_name(ctx.bufnr), code = code, row = row })
+  range = range or { row, 0, row, #api.nvim_buf_get_lines(ctx.bufnr, row, row + 1, false)[1] }
+  return submit(ctx, { kind = 'send', bufnr = ctx.bufnr, path = api.nvim_buf_get_name(ctx.bufnr), code = code, row = row, range = range })
 end
 
 function M.start(bufnr)
@@ -182,7 +183,13 @@ function M.send_selection()
   end
   if mode == '' or p1[2] == 0 then return fail('no selection') end
   local lines = vim.fn.getregion(p1, p2, { type = mode })
-  return send(0, table.concat(lines, '\n'), math.max(p1[2], p2[2]) - 1)
+  if p1[2] > p2[2] or (p1[2] == p2[2] and p1[3] > p2[3]) then p1, p2 = p2, p1 end
+  local first, last = p1[2] - 1, p2[2] - 1
+  local a = api.nvim_buf_get_lines(0, first, first + 1, false)[1]
+  local b = api.nvim_buf_get_lines(0, last, last + 1, false)[1]
+  local c1, c2 = math.min(p1[3] - 1, #a), math.min(p2[3] - 1, #b)
+  if mode == 'V' then c1, c2 = 0, #b end
+  return send(0, table.concat(lines, '\n'), last, { first, c1, last, c2 })
 end
 
 function M.interrupt(bufnr)
@@ -212,7 +219,8 @@ local function commands()
   end
   cmd('RepliseRun', function(a) M.run_buffer({ save = a.bang }) end, { bang = true })
   cmd('RepliseSend', function(a)
-    send(0, table.concat(api.nvim_buf_get_lines(0, a.line1 - 1, a.line2, false), '\n'), a.line2 - 1)
+    local lines = api.nvim_buf_get_lines(0, a.line1 - 1, a.line2, false)
+    send(0, table.concat(lines, '\n'), a.line2 - 1, { a.line1 - 1, 0, a.line2 - 1, #lines[#lines] })
   end, { range = true })
 end
 

@@ -69,7 +69,8 @@ Every option left out is off.
 | `get_context(bufnr?)` | `{ bufnr, ft, root, key, backend }` or `nil, err`. |
 | `get_session(bufnr?)` | `{ state = 'starting'|'idle'|'busy', root, ft, handle, current?, pending? }` or `nil`. |
 | `get_repl_buffer(bufnr?)` | Terminal buffer of the session, for your own view. |
-| `require('replise.inline').focus()` / `.leave()` / `.clear(bufnr?)` / `.clear_all()` | Inline pane. `clear` removes only the view, never the process. |
+| `require('replise.inline').focus(bufnr?)` / `.focus_here()` / `.leave()` | Enter the nearest result, enter only a result directly below the cursor, or return to source. |
+| `require('replise.inline').clear(bufnr?)` / `.clear_all()` | Remove the nearest result (or the one being browsed), or all results. Never stops the process. |
 
 Request functions return a request id, or `nil, err` (also shown with `vim.notify`).
 
@@ -103,15 +104,17 @@ end)
 
 ## Inline pane
 
-`inline = { enabled = true, max_height = 8, max_width = 72, max_lines = 1000 }`
+`inline = { enabled = true, max_height = 8, max_width = 72, max_lines = 1000, col_offset = 0 }`
 
-- Each source buffer gets one live log pane. Whole-file runs anchor it below the last line of the file; sends anchor it
-  below the sent line or the last selected line. Blank virtual lines reserve space below the extmark, with a focusable
-  bordered float drawn over them, so source text is never changed or covered.
+- Each executed range keeps its own log pane. Running the same range again replaces just that result; other results stay.
+  Ranges follow source edits with extmarks. Whole-file runs have a separate pane below the last line of the file; sends
+  anchor their panes below the sent line or the last selected line. Blank virtual lines reserve space, with focusable
+  bordered floats drawn over them, so source text is never changed or covered. Panes ending on the same line stack.
 - `max_width`/`max_height` include the border. The width is the widest line, then the height is the wrapped height
   (correct for CJK). Both are clamped to the window. `max_lines` is the retained log and does not depend on the pane's
-  size. Invalid values (`max_*` must be integers >= 3, `max_lines` >= 1) are reported, and that run gets no pane; the
-  process is unaffected.
+  size. `col_offset` moves the border right by that many columns from the source text's left edge (try `4`), clamped to
+  leave room in narrow windows. Invalid values (`max_*` must be integers >= 3, `max_lines` >= 1, `col_offset` >= 0) are
+  reported, and that run gets no pane; existing results and the process are unaffected.
 - Streams in real time, including partial lines and `\r` progress. ANSI color (CSI) codes are stripped, even when split
   across chunks, and stderr is highlighted. The log buffer is read-only.
   While the pane's cursor is on the last line it follows new output; scroll up to browse, `G` to follow again.
@@ -121,7 +124,9 @@ end)
 - The title adds `stale` once the source buffer has changed since the run (any edit, even one undone).
 - The pane hides when its anchor scrolls off-screen or into a closed fold, or when its buffer isn't shown, and comes
   back on redraw.
-- `focus()` reveals an off-screen anchor before entering the pane; `leave()` returns to the source (`wincmd w`/`p` work too).
+- `focus()` chooses the nearest result and reveals its anchor if off-screen; `focus_here()` only enters a result directly
+  below the cursor's line and returns `false` if there is none. From a log buffer, actions target that result. `leave()`
+  returns to the source (`wincmd w`/`p` work too).
   Running a file never moves the source cursor. `clear()` removes only the view; later output from the same request does
   not reopen it, a new run does. Closing the float with `:q` does not clear it.
 - The log buffer has `filetype=replise_inline`, so you can add viewer keys yourself:
@@ -130,6 +135,16 @@ end)
 vim.api.nvim_create_autocmd('FileType', { pattern = 'replise_inline', callback = function(a)
   vim.keymap.set('n', '<Esc>', require('replise.inline').leave, { buffer = a.buf })
 end })
+```
+
+To enter a result with `Enter` from the line just above it, while keeping normal `Enter` elsewhere:
+
+```lua
+vim.keymap.set('n', '<CR>', function()
+  if not require('replise.inline').focus_here() then
+    vim.api.nvim_feedkeys(vim.keycode('<CR>'), 'n', false)
+  end
+end, { buffer = true }) -- e.g. in after/ftplugin/julia.lua
 ```
 
 ## Julia
@@ -213,8 +228,8 @@ before running it so the interrupt checks use the actual executable.
 
 - Neovim 0.12+ only (developed and tested on 0.12.5, Windows).
 - One request at a time per session; no queue beyond the one startup-pending request.
-- The inline pane belongs to one window per buffer (the one that ran). Other windows on that buffer show only the blank
-  gap. When the anchor scrolls into or out of view, repositioning happens after redraw, so the old placement can show
+- Each inline pane belongs to one source window (the one that ran or focused it). Other windows on that buffer show only
+  the blank gap. When the anchor scrolls into or out of view, repositioning happens after redraw, so the old placement can show
   for one frame.
 - The busy indicator uses the title and bottom border (two rows), not a large block inside the log.
 - Only CSI escape sequences are parsed. Other escapes (e.g. OSC) lose just their ESC byte.
