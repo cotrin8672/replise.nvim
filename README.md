@@ -15,10 +15,10 @@ callback table.
 
 ## Install
 
-With a plugin manager, point at the repository or a local checkout, for example in lazy.nvim:
+For example, with lazy.nvim:
 
 ```lua
-{ dir = '~/ghq/github.com/cotrin8672/replise.nvim', dependencies = { 'Vigemus/iron.nvim' } }
+{ 'cotrin8672/replise.nvim', dependencies = { 'Vigemus/iron.nvim' } }
 ```
 
 To try a checkout without touching your config:
@@ -164,8 +164,8 @@ require('replise.backends.julia').new({
   - With a rule, the first run includes the file. With Revise, the project files it actually includes are tracked. The first run
     then calls `run` (`include_and_call`, the default) or does nothing more (`include`).
   - Later runs call `Revise.revise()` (or re-include without Revise) and then evaluate `run`. `main()` is never guessed.
-- `send_line`/`send_selection` evaluate the text in `Main` and print the value REPL-style. A trailing `;` suppresses
-  it.
+- `send_line`/`send_selection` evaluate the text in `Main`, with the source file's location so relative `include` and
+  `@__DIR__` resolve from that file. They print the value REPL-style. A trailing `;` suppresses it.
 - File and runner return values are displayed too. Keeping this process alive preserves compiled methods; initial JIT
   compilation still happens. Use `restart` for edits that Revise cannot apply.
 - Output goes to both the terminal and the inline pane. `interrupt` cancels queued work or sends Ctrl-C to running work,

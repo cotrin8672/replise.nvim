@@ -156,7 +156,7 @@ events = {}
 local marker = dir .. '/cpu-started'
 B.send(h, { id = id, bufnr = src,
   code = 'write(raw"' .. marker .. '", "started"); while true; global cpu_scratch = zeros(4096); end', path = '' })
-check(vim.wait(30000, function() return vim.uv.fs_stat(marker) ~= nil end, 10), 'CPU work started')
+check(vim.wait(30000, function() return vim.uv.fs_stat(marker) ~= nil end, 10), 'CPU work started', events)
 B.interrupt(h)
 local t = wait_for(function(ev) return ev.request_id == id and (ev.kind == 'done' or ev.kind == 'error') end, 15000,
   'CPU-bound interrupt')
@@ -168,6 +168,10 @@ local r = req(h, 'send', { code = 'print("a\\"ü\\$"); print(stderr, "b"); PRE +
 check(r.term.kind == 'done' and r.running, 'send done', r)
 check(r.out:find('a"ü$', 1, true) and r.out:find('42', 1, true) and r.err == 'b', 'send streams', r)
 check(req(h, 'send', { code = 'PRE;' }).out == '', 'trailing ; suppresses value')
+r = req(h, 'send', { code = 'include("../value.jl")', path = dir .. '/src/unsaved.jl' })
+check(r.out == '42\n', 'sent text resolves relative includes from its source file', r)
+r = req(h, 'send', { code = 'basename(@__FILE__) == "unsaved.jl" && basename(@__DIR__) == "src"', path = dir .. '/src/unsaved.jl' })
+check(r.out == 'true\n', 'sent text retains its source location', r)
 
 -- a UTF-8 char split across writes: complete chunks to nvim, every byte exactly once to the terminal
 r = req(h, 'send', { code = 'print("Q"); write(stdout, UInt8[0xe6, 0x97]); flush(stdout); sleep(0.4); write(stdout, UInt8[0xa5]); println("Z")' })

@@ -88,7 +88,8 @@ pump(p, term, ev, sid) = @async begin
     isempty(held) || emit(ev, sid, held)
 end
 
-eval_main(code, name) = include_string(Main, code, name)
+eval_main(code, name) =
+    task_local_storage(() -> include_string(Main, code, name), :SOURCE_PATH, abspath(name))
 
 # REPL-style value display; `;` at the end of an explicit expression suppresses it.
 function show_value(v, code="")
