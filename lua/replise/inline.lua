@@ -111,7 +111,7 @@ local function tick()
     local w = v.float
     if v.cfg and SPIN[v.state] and api.nvim_win_is_valid(w) and api.nvim_win_get_tabpage(w) == api.nvim_get_current_tabpage() then
       v.frame, any = v.frame + 1, true
-      sync(v)
+      if not v.chunks then sync(v) end
     end
   end
   if not any then timer:stop() end -- nothing visible is spinning: sleep until a sync restarts it
@@ -166,10 +166,9 @@ function sync(v)
     - th(win, { start_row = info.topline - 1, end_row = info.topline - 1 }).fill
     + sv.topfill
 
-  local o, tw = v.opts, 0
+  local o = v.opts
   local rails = o.style == 'rails'
   local t, f = rails and '' or title(v), rails and rail_footer(v) or nil
-  for _, c in ipairs(rails and f or t) do tw = tw + fn.strdisplaywidth(c[1]) end
   local sides = rails and 0 or 2
   local full, usable = o.width == 'full', info.width - info.textoff
   local margins = full and 2 or 1
@@ -180,6 +179,8 @@ function sync(v)
     local width = full and available or (o.width <= 1 and math.floor(available * o.width) or o.width)
     iw = math.min(available, math.max(3, width)) - sides
   else
+    local tw = 0
+    for _, c in ipairs(rails and f or t) do tw = tw + fn.strdisplaywidth(c[1]) end
     iw = math.min(math.max(v.width, tw), o.max_width - sides, available - sides)
   end
   local cap = math.min(o.max_height, info.height) - 2
@@ -281,7 +282,7 @@ function M.open(bufnr, row, opts, req)
   v.range = api.nvim_buf_set_extmark(bufnr, ranges, range[1], range[2], {
     id = v.range, end_row = range[3], end_col = range[4], end_right_gravity = true,
   })
-  v.opts, v.esc, v.tick = o, nil, api.nvim_buf_get_changedtick(bufnr)
+  v.opts, v.chunks, v.esc, v.tick = o, nil, {}, api.nvim_buf_get_changedtick(bufnr)
   v.gap, v.width, v.cr, v.state, v.msg, v.t0, v.t1, v.frame = nil, 1, false, 'starting', nil, uv.hrtime(), nil, 0
   api.nvim_buf_clear_namespace(v.log, ns, 0, -1)
   write(v.log, api.nvim_buf_set_lines, 0, -1, false, {})
@@ -294,7 +295,9 @@ function M.open(bufnr, row, opts, req)
           pending = true
           vim.schedule(function()
             pending = false
-            for _, x in pairs(views) do sync(x) end
+            for _, x in pairs(views) do
+              if not x.chunks then sync(x) end
+            end
           end)
         end
         return false
@@ -304,55 +307,105 @@ function M.open(bufnr, row, opts, req)
   sync(v)
 end
 
-function M.append(bufnr, chunk, stream)
-  local v = live(views[bufnr] or latest[resolve(bufnr)])
-  if not v or not chunk then return end
-  -- drop ANSI CSI codes (colors/cursor); an escape cut at the chunk end waits for the next chunk
-  chunk = (v.esc or '') .. chunk
-  v.esc = chunk:match('\27%[[0-?]*[ -/]*$') or chunk:match('\27$')
-  if v.esc then chunk = chunk:sub(1, -#v.esc - 1) end
-  chunk = chunk:gsub('\27%[[0-?]*[ -/]*[@-~]', ''):gsub('\27', '')
-  if chunk == '' then return end
+local function strip_ansi(v, chunk, stream)
+  if not v.esc[stream] and not chunk:find('\27', 1, true) then return chunk end
+  -- An incomplete CSI waits for more bytes from its own stream.
+  chunk = (v.esc[stream] or '') .. chunk
+  local esc = chunk:match('\27%[[0-?]*[ -/]*$') or chunk:match('\27$')
+  v.esc[stream] = esc
+  if esc then chunk = chunk:sub(1, -#esc - 1) end
+  return (chunk:gsub('\27%[[0-?]*[ -/]*[@-~]', ''):gsub('\27', ''))
+end
+
+local function flush(v)
+  local chunks = v.chunks
+  v.chunks = nil
+  if not api.nvim_buf_is_valid(v.log) then return sync(v) end
   local n = api.nvim_buf_line_count(v.log)
-  local follow = api.nvim_win_get_cursor(v.float)[1] >= n
+  local follow = not api.nvim_win_is_valid(v.float) or api.nvim_win_get_cursor(v.float)[1] >= n
   local old = api.nvim_buf_get_lines(v.log, n - 1, n, false)[1]
-  local lines, keep, shrink = { old }, #old, false
-  for text, sep in chunk:gmatch('([^\r\n]*)([\r\n]?)') do
-    if text ~= '' then
-      if v.cr then -- carriage return: the next text rewrites the current line (progress bars)
-        lines[#lines] = text
-        if #lines == 1 then keep, shrink = 0, #old > 0 end
-      else
-        lines[#lines] = lines[#lines] .. text
+  local lines, marks = {}, {}
+  local parts, spans, col, keep = {}, nil, #old, #old
+  local function finish_line()
+    lines[#lines + 1] = table.concat(parts)
+    marks[#lines] = spans
+    parts, spans, col = {}, nil, 0
+  end
+  for _, entry in ipairs(chunks) do
+    local chunk, stream = strip_ansi(v, entry[1], entry[2]), entry[2]
+    for text, sep in chunk:gmatch('([^\r\n]*)([\r\n]?)') do
+      if text ~= '' then
+        if v.cr then -- the next text after CR replaces both the line and its colors
+          parts, spans, col = {}, nil, 0
+          if #lines == 0 then keep = 0 end
+        end
+        if stream == 'stderr' then
+          spans = spans or {}
+          local prev = spans[#spans]
+          if prev and prev[2] == col then
+            prev[2] = col + #text
+          else
+            spans[#spans + 1] = { col, col + #text }
+          end
+        end
+        parts[#parts + 1], col, v.cr = text, col + #text, false
       end
-      v.cr = false
-    end
-    if sep == '\n' then
-      lines[#lines + 1], v.cr = '', false
-    elseif sep == '\r' then
-      v.cr = true
+      if sep == '\n' then
+        finish_line()
+        v.cr = false
+      elseif sep == '\r' then
+        v.cr = true
+      end
     end
   end
-  for _, l in ipairs(lines) do v.width = math.max(v.width, fn.strdisplaywidth(l)) end
-  lines[1] = lines[1]:sub(keep + 1)
+  if #lines == 0 and #parts == 0 then return sync(v) end
+  finish_line()
+  local replaced = keep < #old
+  if replaced then api.nvim_buf_clear_namespace(v.log, ns, n - 1, n) end
   write(v.log, api.nvim_buf_set_text, n - 1, keep, n - 1, #old, lines)
-  if stream == 'stderr' then
-    local er = n - 2 + #lines
-    api.nvim_buf_set_extmark(v.log, ns, n - 1, keep, {
-      end_row = er, end_col = #lines[#lines] + (#lines == 1 and keep or 0), hl_group = 'DiagnosticError',
-    })
+  n = n - 1
+  local over = math.max(0, n + #lines - v.opts.max_lines)
+  if over > 0 then
+    api.nvim_buf_clear_namespace(v.log, ns, 0, over)
+    write(v.log, api.nvim_buf_set_lines, 0, over, false, {})
   end
-  local over = api.nvim_buf_line_count(v.log) - v.opts.max_lines
-  if over > 0 then write(v.log, api.nvim_buf_set_lines, 0, over, false, {}) end
-  if shrink or over > 0 then -- the widest line may be gone: rescan the retained log (at most max_lines)
-    v.width = 1
-    for _, l in ipairs(api.nvim_buf_get_lines(v.log, 0, -1, false)) do v.width = math.max(v.width, fn.strdisplaywidth(l)) end
+  for i = math.max(1, over - n + 1), #lines do
+    if marks[i] then
+      for _, span in ipairs(marks[i]) do
+        api.nvim_buf_set_extmark(v.log, ns, n + i - 1 - over, span[1], {
+          end_col = span[2], hl_group = 'DiagnosticError',
+        })
+      end
+    end
+  end
+  if not v.opts.width then
+    if replaced or over > 0 then -- the widest line may have been overwritten or evicted
+      v.width = 1
+      lines = api.nvim_buf_get_lines(v.log, 0, -1, false)
+    else
+      lines[1] = old .. lines[1]
+    end
+    for _, l in ipairs(lines) do v.width = math.max(v.width, fn.strdisplaywidth(l)) end
   end
   sync(v)
-  if follow and views[v.log] == v then -- tail-follow unless the user moved up to browse
+  if follow and views[v.log] == v and api.nvim_win_is_valid(v.float) then -- do not move a user browsing above the tail
     api.nvim_win_set_cursor(v.float, { api.nvim_buf_line_count(v.log), 0 })
     api.nvim_win_call(v.float, function() vim.cmd('normal! zb') end)
   end
+end
+
+function M.append(bufnr, chunk, stream)
+  local v = views[bufnr] or latest[resolve(bufnr)]
+  if not v or not chunk or chunk == '' then return end
+  local chunks = v.chunks
+  if not chunks then
+    chunks = {}
+    v.chunks = chunks
+    vim.schedule(function()
+      if v.chunks == chunks then flush(v) end
+    end)
+  end
+  chunks[#chunks + 1] = { chunk, stream == 'stderr' and 'stderr' or 'stdout' }
 end
 
 function M.set_state(bufnr, state, message)
@@ -360,7 +413,11 @@ function M.set_state(bufnr, state, message)
   if not v then return end
   v.state, v.msg = state, message and message:match('[^\r\n]*')
   v.t1 = not SPIN[state] and uv.hrtime() or nil
-  sync(v)
+  if v.chunks and not SPIN[state] then
+    flush(v) -- commit the final output and status together
+  elseif not v.chunks then
+    sync(v)
+  end
 end
 
 local function focus(v)
@@ -396,6 +453,7 @@ local function clear(v)
   if api.nvim_get_current_win() == v.float then M.leave() end
   views[v.log] = nil
   if latest[v.buf] == v then latest[v.buf] = nil end
+  v.chunks = nil
   if api.nvim_buf_is_valid(v.buf) then
     api.nvim_buf_del_extmark(v.buf, ns, v.mark)
     api.nvim_buf_del_extmark(v.buf, ranges, v.range)

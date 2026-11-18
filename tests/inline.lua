@@ -6,6 +6,12 @@ vim.opt.winblend = 17
 local inline = require('replise.inline')
 local ns = api.nvim_get_namespaces()['replise.inline']
 
+local function next_turn()
+  local ready = false
+  vim.schedule(function() ready = true end)
+  assert(vim.wait(1000, function() return ready end, 1), 'scheduled output timed out')
+end
+
 local function settle(ms)
   vim.cmd('redraw')
   vim.wait(ms or 30)
@@ -140,9 +146,11 @@ assert(api.nvim_win_get_config(pw).height + 2 == 8)
 assert(inline.focus(buf) and api.nvim_get_current_win() == pw)
 api.nvim_win_set_cursor(pw, { 1, 0 })
 inline.append(buf, 'more\n')
+next_turn()
 assert(api.nvim_win_get_cursor(pw)[1] == 1, 'browsing position kept')
 vim.cmd('normal! G')
 inline.append(buf, 'tail\n')
+next_turn()
 assert(api.nvim_win_get_cursor(pw)[1] == api.nvim_buf_line_count(lb), 'follow resumes at tail')
 assert(inline.leave() and api.nvim_get_current_win() == win, 'leave restores source')
 vim.cmd('wincmd w')
@@ -177,12 +185,16 @@ assert(#panes() == 0, 'late chunks ignored')
 inline.open(buf, 0, { max_lines = 5 })
 local function width() return api.nvim_win_get_config(panes()[1]).width end
 inline.append(buf, ('w'):rep(60))
+next_turn()
 assert(width() == 60, 'width fits long progress line')
 inline.append(buf, '\rshort\n') -- CR replaces the widest line
+next_turn()
 assert(width() < 40, 'width shrinks after CR replacement: ' .. width())
 inline.append(buf, ('w'):rep(60) .. '\n')
+next_turn()
 assert(width() == 60)
 for i = 1, 20 do inline.append(buf, i .. '\n') end
+next_turn()
 lb = api.nvim_win_get_buf(panes()[1])
 assert(api.nvim_buf_line_count(lb) == 5 and api.nvim_buf_get_lines(lb, 0, 1, false)[1] == '17', 'retention')
 assert(width() < 40, 'width shrinks after retention drops the widest line: ' .. width())
@@ -251,6 +263,7 @@ assert(#panes() == 2 and text(first) == 'first' and text(second) == 'second', 'r
 assert(api.nvim_win_get_position(first)[2] == 4 and api.nvim_win_get_position(second)[2] == 4, 'right inset')
 assert(inline.focus_here() and api.nvim_get_current_win() == first, 'Enter enters the pane below the cursor')
 inline.append(buf, ' streamed')
+next_turn()
 assert(text(first) == 'first' and text(second) == 'second streamed', 'stream stays with its request while browsing old output')
 assert(inline.leave())
 api.nvim_win_set_cursor(win, { 2, 0 })
@@ -444,6 +457,92 @@ for _, style in ipairs({ 'rounded', 'rails' }) do
   api.nvim_set_current_win(win)
   settle()
 end
+
+-- Compare semantic color coverage, not extmark IDs or span boundaries.
+local function snapshot(split, yield_each, state)
+  inline.open(buf, 0, { width = 'full', max_lines = 6 })
+  local w = panes()[1]
+  local log = api.nvim_win_get_buf(w)
+  local writes = 0
+  api.nvim_buf_attach(log, false, { on_lines = function() writes = writes + 1 end })
+  local function emit(chunk, stream)
+    inline.append(buf, chunk, stream)
+    if yield_each then next_turn() end
+  end
+  if split then
+    emit('0\n1\n2\n\27[3', 'stderr')
+    emit('head:', 'stdout') -- stdout must not complete the pending stderr escape
+    emit('1m', 'stderr')
+    emit('赤', 'stderr')
+    emit('!\n', 'stdout')
+    emit('progress\r', 'stderr')
+    emit('ok\r', 'stdout')
+    emit('\n', 'stdout')
+    emit('A\nB', 'stderr')
+    emit('C', 'stdout')
+    emit('D', 'stderr')
+    emit('\r', 'stderr')
+    emit('END\n', 'stdout')
+    emit('E', 'stderr')
+  else
+    emit('0\n1\n2\n', 'stderr')
+    emit('head:', 'stdout')
+    emit('\27[31m赤', 'stderr')
+    emit('!\n', 'stdout')
+    emit('progress\r', 'stderr')
+    emit('ok\r\n', 'stdout')
+    emit('A\nB', 'stderr')
+    emit('C', 'stdout')
+    emit('D\r', 'stderr')
+    emit('END\n', 'stdout')
+    emit('E', 'stderr')
+  end
+  inline.set_state(buf, state, 'final\nignored')
+  assert(writes > 0 and (yield_each or writes == 2), 'one batch write plus retention trim')
+  local rows = api.nvim_buf_get_lines(log, 0, -1, false)
+  local colors = vim.tbl_map(function(l) return ('.'):rep(#l) end, rows)
+  for _, m in ipairs(api.nvim_buf_get_extmarks(log, ns, 0, -1, { details = true })) do
+    local row, col, d = m[2] + 1, m[3], m[4]
+    assert(d.hl_group == 'DiagnosticError' and d.end_row == row - 1)
+    colors[row] = colors[row]:sub(1, col) .. ('E'):rep(d.end_col - col) .. colors[row]:sub(d.end_col + 1)
+  end
+  local title = api.nvim_win_get_config(w).title[1][1]
+  assert(title:find(state, 1, true) and title:find(': final ', 1, true), 'final status flushed with output')
+  local result = { rows, colors, api.nvim_win_get_cursor(w) }
+  inline.clear_all()
+  return result
+end
+local expected_snapshot = {
+  { '2', 'head:赤!', 'ok', 'A', 'END', 'E' }, { 'E', '.....EEE.', '..', 'E', '...', 'E' }, { 6, 0 },
+}
+assert(vim.deep_equal(snapshot(false, false, 'done'), expected_snapshot), 'combined output')
+assert(vim.deep_equal(snapshot(true, false, 'error'), expected_snapshot), 'split output in one batch')
+assert(vim.deep_equal(snapshot(true, true, 'interrupted'), expected_snapshot), 'split output across event turns')
+
+-- Deleting old lines must preserve the surviving text the user is reading.
+inline.open(buf, 0, { width = 25, max_lines = 10 })
+pw = panes()[1]
+for i = 1, 10 do inline.append(buf, i .. '\n') end
+next_turn()
+assert(inline.focus(buf))
+vim.cmd('normal! 6Gzt')
+inline.append(buf, '11\n')
+inline.append(buf, '12\n')
+next_turn()
+assert(api.nvim_get_current_line() == '7' and vim.fn.line('w0') == 4, 'browse position survives trimming above it')
+inline.clear_all()
+
+-- A scheduled callback from an old run cannot write into a reused or cleared pane.
+inline.open(buf, 0, opts)
+inline.append(buf, 'old\27[')
+inline.open(buf, 0, opts)
+inline.append(buf, 'new')
+next_turn()
+assert(text(panes()[1]) == 'new', 'rerun drops pending output and parser state')
+inline.append(buf, 'discard')
+inline.clear_all()
+next_turn()
+assert(#panes() == 0, 'clear cancels pending output')
 
 -- bad options are rejected before any gap/float/log is created
 local notified, notify = nil, vim.notify
