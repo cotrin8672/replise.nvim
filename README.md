@@ -203,8 +203,8 @@ require('replise.backends.julia').new({
 - File and runner return values are displayed too. Keeping this process alive preserves compiled methods; initial JIT
   compilation still happens. Use `restart` for edits that Revise cannot apply.
 - Output goes to both the terminal and the inline pane. `interrupt` cancels queued work or sends Ctrl-C to running work,
-  and completion is acknowledged by Julia. The terminal
-  (`get_repl_buffer()`) is the same process, so you can also type in it.
+  and completion is acknowledged by Julia. The terminal cursor stays hidden while replise.nvim runs code and returns
+  when the run finishes. The terminal (`get_repl_buffer()`) is the same process, so you can also type in it.
 
 ## Other languages
 

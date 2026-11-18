@@ -144,9 +144,12 @@ end
 # one terminal event: done or error (sid 0 = bootstrap: only errors; `ready` comes from the REPL itself).
 function capture(f, sid, started=Ref(true))
     term_out, term_err = stdout, stderr
+    tty = term_out isa Base.TTY
     pipes, tasks = (), ()
     failure = nothing
     try
+        # Keep the terminal cursor out of the streamed output until the prompt returns.
+        tty && (print(term_out, "\e[?25l"); flush(term_out))
         pipes = (redirect_stdout(), redirect_stderr())
         tasks = (pump(pipes[1], term_out, "stdout", sid), pump(pipes[2], term_err, "stderr", sid))
         f()
@@ -159,10 +162,14 @@ function capture(f, sid, started=Ref(true))
         end
     finally
         Base.disable_sigint() do
-            redirect_stdout(term_out)
-            redirect_stderr(term_err)
-            foreach(p -> close(p.in), pipes)
-            foreach(wait, tasks)
+            try
+                redirect_stdout(term_out)
+                redirect_stderr(term_err)
+                foreach(p -> close(p.in), pipes)
+                foreach(wait, tasks)
+            finally
+                tty && (print(term_out, "\e[?25h"); flush(term_out))
+            end
             started[] || return
             failure === nothing ? (sid == 0 || emit("done", sid)) : emit("error", sid, failure)
         end
